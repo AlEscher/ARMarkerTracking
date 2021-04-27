@@ -20,6 +20,7 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 	// A vector of shapes, each shape represented by another vector of Points
 	std::vector<std::vector<cv::Point>> contours, boundingBoxes;
 	cv::findContours(input, contours, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+	const int sizeLimit = 1000;
 
 	for (auto& shape : contours)
 	{
@@ -31,7 +32,11 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 		{
 			// Create and save a bounding box around our rectangle
 			cv::Rect rect = cv::boundingRect(approximation);
-			boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
+			// Filter out small rectangles that are likely just noise
+			if (rect.area() > sizeLimit)
+			{
+				boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
+			}
 		}
 	}
 
@@ -42,7 +47,7 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 {
 	for (const auto& box : boundingBoxes)
 	{
-		cv::polylines(frame, box, true, cv::Scalar(255, 50, 50, 255));
+		cv::polylines(frame, box, true, cv::Scalar(50, 50, 255, 255));
 	}
 }
 
@@ -54,7 +59,7 @@ int main()
 	double fps = 30.0;
 	// Set to false in order to use webcam
 	bool useVideo = true;
-	int thresholdValue = 0, thresholdType = 3;
+	int thresholdValue = 80, thresholdType = 3;
 
 	if (useVideo || !captureSrc.open(0))
 	{
@@ -80,7 +85,7 @@ int main()
 
 	cv::namedWindow(windowName);
 	cv::createTrackbar("Threshold value", windowName, &thresholdValue, 255, nullptr);
-	//cv::createTrackbar("Threshold type", windowName, &thresholdType, 5, nullptr);
+	cv::createTrackbar("Threshold type", windowName, &thresholdType, 5, nullptr);
 
 	while (!GetAsyncKeyState(VK_ESCAPE))
 	{
@@ -95,8 +100,8 @@ int main()
 
 		GrayScaleImage(frame, result, thresholdValue, thresholdType);
 		auto boundingBoxes = FindMarkers(result);
-		MarkMarkers(result, boundingBoxes);
-		cv::imshow(windowName, result);
+		MarkMarkers(frame, boundingBoxes);
+		cv::imshow(windowName, frame);
 		cv::waitKey(25);
 	}
 
