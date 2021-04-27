@@ -47,7 +47,38 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 {
 	for (const auto& box : boundingBoxes)
 	{
+		// Connect the dots of the box with lines
 		cv::polylines(frame, box, true, cv::Scalar(50, 50, 255, 255));
+		// Draw circles on the lines
+		for (size_t i = 0; i < box.size(); i++)
+		{
+			// Go through all the points of the box
+			const int endPoint = (i + 1) % box.size();
+			const cv::Vec2i deltaVec = { box[endPoint] - box[i] };
+			// Apparently too advanced for openCV, couldn't find any proper method
+			const int length = sqrt(deltaVec[0] * deltaVec[0] + deltaVec[1] * deltaVec[1]);
+			const cv::Vec2i deltaVecNorm = deltaVec / length;
+
+			// Draw 7 equidistant circles
+			cv::Scalar circleColor = { 50, 255, 50, 255 };
+			const int numCircles = 7;
+			size_t circlesDrawn = 0;
+			size_t j = 0;
+			for (auto line = cv::LineIterator(frame, box[i], box[endPoint]); circlesDrawn < 7; line++, j++)
+			{
+				// Avoid division by 0 in line.pos()
+				if (line.step == 0)
+				{
+					break;
+				}
+
+				if (j % (length / numCircles) == 0)
+				{
+					cv::circle(frame, line.pos(), length / 50, circleColor);
+					circlesDrawn++;
+				}
+			}
+		}
 	}
 }
 
