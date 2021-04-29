@@ -2,9 +2,13 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core/utility.hpp>
 
 #include <Windows.h>
 #include <vector>
+
+
+bool g_bBoxes = false;
 
 void GrayScaleImage(const cv::Mat& frame, cv::Mat& result, int thresholdValue, int thresholdType)
 {
@@ -20,7 +24,6 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 	// A vector of shapes, each shape represented by another vector of Points
 	std::vector<std::vector<cv::Point>> contours, boundingBoxes;
 	cv::findContours(input, contours, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
-	const int sizeLimit = 1000;
 
 	for (auto& shape : contours)
 	{
@@ -30,12 +33,20 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 		// Filter for rectangles
 		if (approximation.size() == 4)
 		{
-			// Create and save a bounding box around our rectangle
-			cv::Rect rect = cv::boundingRect(approximation);
-			// Filter out small rectangles that are likely just noise
-			if (rect.area() > sizeLimit)
+			if (g_bBoxes)
 			{
-				boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
+				const int sizeLimit = 1000;
+				// Create and save a bounding box around our rectangle
+				cv::Rect rect = cv::boundingRect(approximation);
+				// Filter out small rectangles that are likely just noise
+				if (rect.area() > sizeLimit)
+				{
+					boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
+				}
+			}
+			else
+			{
+				boundingBoxes.push_back(approximation);
 			}
 		}
 	}
@@ -57,15 +68,14 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 			const cv::Vec2i deltaVec = { box[endPoint] - box[i] };
 			// Apparently too advanced for openCV, couldn't find any proper method
 			const int length = sqrt(deltaVec[0] * deltaVec[0] + deltaVec[1] * deltaVec[1]);
-			const cv::Vec2i deltaVecNorm = deltaVec / length;
 
 			// Draw 7 equidistant circles
 			cv::Scalar circleColor = { 50, 255, 50, 255 };
-			const int numCircles = 7;
 			size_t circlesDrawn = 0;
 			size_t j = 0;
 			for (auto line = cv::LineIterator(frame, box[i], box[endPoint]); circlesDrawn < 7; line++, j++)
 			{
+				const int numCircles = 7;
 				// Avoid division by 0 in line.pos()
 				if (line.step == 0)
 				{
@@ -82,21 +92,51 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
+	const cv::String keys =
+		"{ file f|      | Path to video file }"
+		"{ debug d| false| Show debug data & controls }"
+		"{ help h usage|      | Show this help message }"
+		"{ delay w|25    | Delay between each frame (ms) }"
+		"{ bBox bb|false | Use bounding boxes }";
+
+	const auto cmdParser = cv::CommandLineParser(argc, argv, keys);
+	if (cmdParser.has("help"))
+	{
+		cmdParser.printMessage();
+		return 0;
+	}
+
+	const cv::String debugWindowName = "Grayscaled data";
+	cv::String videoFilePath = "";
 	cv::String windowName = "Camera Feed";
-	cv::String videoName = R"(C:\Dev\Cpp\ARMarkerTracking\ARMarkerTracking\MarkerMovie.MP4)";
-	cv::VideoCapture captureSrc = cv::VideoCapture();
-	double fps = 30.0;
-	// Set to false in order to use webcam
-	bool useVideo = true;
+	auto captureSrc = cv::VideoCapture();
 	int thresholdValue = 80, thresholdType = 3;
 
-	if (useVideo || !captureSrc.open(0))
+	int delay = 25;
+	bool showDebugData = true;
+	bool useVideoFile = false;
+	if (cmdParser.has("file"))
+	{
+		videoFilePath = cmdParser.get<cv::String>("file");
+		useVideoFile = true;
+	}
+	showDebugData = cmdParser.get<bool>("debug");
+	g_bBoxes = cmdParser.get<bool>("bBox");
+	delay = cmdParser.get<int>("delay");
+
+	if (!cmdParser.check())
+	{
+		cmdParser.printErrors();
+		return 1;
+	}
+
+	if (useVideoFile || !captureSrc.open(0))
 	{
 		std::cout << "Falling back to video file!" << std::endl;
 
-		if (!captureSrc.open(videoName))
+		if (!captureSrc.open(videoFilePath))
 		{
 			std::cout << "Couldn't open video file, aborting" << std::endl;
 			return 1;
@@ -105,8 +145,6 @@ int main()
 		{
 			std::cout << "Successfully opened video file!" << std::endl;
 			windowName = "Video Feed";
-			// Get video's FPS
-			fps = captureSrc.get(cv::CAP_PROP_FPS);
 		}
 	}
 	else
@@ -115,12 +153,17 @@ int main()
 	}
 
 	cv::namedWindow(windowName);
-	cv::createTrackbar("Threshold value", windowName, &thresholdValue, 255, nullptr);
-	cv::createTrackbar("Threshold type", windowName, &thresholdType, 5, nullptr);
+	if (showDebugData)
+	{
+		cv::namedWindow(debugWindowName);
+		cv::createTrackbar("Threshold value", windowName, &thresholdValue, 255, nullptr);
+		cv::createTrackbar("Threshold type", windowName, &thresholdType, 5, nullptr);
+	}
+
 
 	while (!GetAsyncKeyState(VK_ESCAPE))
 	{
-		cv::Mat frame, result, grayScaledFrame;
+		cv::Mat frame, grayScaledFrame;
 		// Get the next frame from the camera / video source
 		captureSrc >> frame;
 
@@ -129,11 +172,16 @@ int main()
 			break;
 		}
 
-		GrayScaleImage(frame, result, thresholdValue, thresholdType);
-		auto boundingBoxes = FindMarkers(result);
+		GrayScaleImage(frame, grayScaledFrame, thresholdValue, thresholdType);
+		auto boundingBoxes = FindMarkers(grayScaledFrame);
 		MarkMarkers(frame, boundingBoxes);
 		cv::imshow(windowName, frame);
-		cv::waitKey(25);
+		if (showDebugData)
+		{
+			cv::imshow(debugWindowName, grayScaledFrame);
+		}
+
+		cv::waitKey(delay);
 	}
 
 	captureSrc.release();
