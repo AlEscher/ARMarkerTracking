@@ -23,7 +23,7 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 {
 	// A vector of shapes, each shape represented by another vector of Points
 	std::vector<std::vector<cv::Point>> contours, boundingBoxes;
-	cv::findContours(input, contours, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+	cv::findContours(input, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
 
 	for (auto& shape : contours)
 	{
@@ -39,10 +39,11 @@ std::vector<std::vector<cv::Point>> FindMarkers(const cv::Mat& input)
 				// Create and save a bounding box around our rectangle
 				cv::Rect rect = cv::boundingRect(approximation);
 				// Filter out small rectangles that are likely just noise
-				if (rect.area() > sizeLimit)
+				if (rect.height < 20 || rect.width < 20 || rect.width > input.cols - 10 || rect.height > input.rows - 10 || rect.area() < sizeLimit) 
 				{
-					boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
+					continue;
 				}
+				boundingBoxes.push_back({ rect.tl(), cv::Point(rect.x + rect.width, rect.y), rect.br(), cv::Point(rect.x, rect.y + rect.height) });
 			}
 			else
 			{
@@ -61,32 +62,26 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 		// Connect the dots of the box with lines
 		cv::polylines(frame, box, true, cv::Scalar(50, 50, 255, 255));
 		// Draw circles on the lines
-		for (size_t i = 0; i < box.size(); i++)
+		for (size_t i = 0; i < box.size(); ++i) 
 		{
-			// Go through all the points of the box
-			const int endPoint = (i + 1) % box.size();
-			const cv::Vec2i deltaVec = { box[endPoint] - box[i] };
-			// Apparently too advanced for openCV, couldn't find any proper method
-			const int length = sqrt(deltaVec[0] * deltaVec[0] + deltaVec[1] * deltaVec[1]);
+			// Render the corners, 3 -> Radius, -1 filled circle
+			circle(frame, box[i], 3, CV_RGB(0, 255, 0), -1);
 
-			// Draw 7 equidistant circles
-			cv::Scalar circleColor = { 50, 255, 50, 255 };
-			size_t circlesDrawn = 0;
-			size_t j = 0;
-			for (auto line = cv::LineIterator(frame, box[i], box[endPoint]); circlesDrawn < 7; line++, j++)
+			// Euclidic distance, 7 -> parts, both directions dx and dy
+			const double dx = (static_cast<double>(box[(i + 1) % 4].x) - static_cast<double>(box[i].x)) / 7.0;
+			const double dy = (static_cast<double>(box[(i + 1) % 4].y) - static_cast<double>(box[i].y)) / 7.0;
+
+			// First point already rendered, now the other 6 points
+			for (int j = 1; j < 7; ++j) 
 			{
-				const int numCircles = 7;
-				// Avoid division by 0 in line.pos()
-				if (line.step == 0)
-				{
-					break;
-				}
+				// Position calculation
+				const double px = static_cast<double>(box[i].x) + static_cast<double>(j) * dx;
+				const double py = static_cast<double>(box[i].y) + static_cast<double>(j) * dy;
 
-				if (j % (length / numCircles) == 0)
-				{
-					cv::circle(frame, line.pos(), length / 50, circleColor);
-					circlesDrawn++;
-				}
+				cv::Point p;
+				p.x = static_cast<int>(px);
+				p.y = static_cast<int>(py);
+				circle(frame, p, 2, CV_RGB(0, 0, 255), -1);
 			}
 		}
 	}
@@ -95,11 +90,11 @@ void MarkMarkers(cv::Mat& frame, const std::vector<std::vector<cv::Point>>& boun
 int main(int argc, char** argv)
 {
 	const cv::String keys =
-		"{ file f|      | Path to video file }"
-		"{ debug d| false| Show debug data & controls }"
-		"{ help h usage|      | Show this help message }"
-		"{ delay w|25    | Delay between each frame (ms) }"
-		"{ bBox bb|false | Use bounding boxes }";
+		"{ file f|| Path to video file }"
+		"{ debug d|false| Show debug data & controls }"
+		"{ help h usage|| Show this help message }"
+		"{ delay w|25| Delay between each frame (ms) }"
+		"{ bBox bb|true| Use bounding boxes }";
 
 	const auto cmdParser = cv::CommandLineParser(argc, argv, keys);
 	if (cmdParser.has("help"))
@@ -114,17 +109,15 @@ int main(int argc, char** argv)
 	auto captureSrc = cv::VideoCapture();
 	int thresholdValue = 80, thresholdType = 3;
 
-	int delay = 25;
-	bool showDebugData = true;
 	bool useVideoFile = false;
 	if (cmdParser.has("file"))
 	{
 		videoFilePath = cmdParser.get<cv::String>("file");
 		useVideoFile = true;
 	}
-	showDebugData = cmdParser.get<bool>("debug");
+	const bool showDebugData = cmdParser.has("debug");
+	const int delay = cmdParser.get<int>("delay");
 	g_bBoxes = cmdParser.get<bool>("bBox");
-	delay = cmdParser.get<int>("delay");
 
 	if (!cmdParser.check())
 	{
